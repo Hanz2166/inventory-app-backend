@@ -2,21 +2,19 @@ require('dotenv').config();
 
 console.log('=== LOADING DATABASE CONFIG ===');
 
+// Helper function to parse DATABASE_URL (Railway/Heroku format)
 const parseDatabaseUrl = (url) => {
   if (!url) return null;
   
   try {
-    const pattern = /^(\w+):\/\/([^:]+):([^@]+)@([^:/]+):?(\d+)?\/(.+?)(\?.*)?$/;
-    const match = url.match(pattern);
+    // Format: postgresql://username:password@host:port/database
+    // Also supports mysql://username:password@host:port/database
+    const match = url.match(/^(\w+):\/\/([^:]+):([^@]+)@([^:/]+):?(\d+)?\/(.+?)(\?.*)?$/);
     
     if (match) {
-      const protocol = match[1];
-      const username = match[2];
-      const password = match[3];
-      const host = match[4];
-      const port = match[5];
-      const database = match[6];
+      const [, protocol, username, password, host, port, database] = match;
       
+      // Determine dialect from protocol
       let dialect = protocol;
       if (protocol === 'postgresql' || protocol === 'postgres') {
         dialect = 'postgres';
@@ -25,6 +23,7 @@ const parseDatabaseUrl = (url) => {
       }
       
       console.log('✅ DATABASE_URL parsed successfully');
+      console.log(`   Dialect: ${dialect}, Host: ${host}, Database: ${database}`);
       
       return {
         dialect,
@@ -36,17 +35,20 @@ const parseDatabaseUrl = (url) => {
       };
     }
   } catch (error) {
-    console.error('Error parsing DATABASE_URL:', error.message);
+    console.error('❌ Error parsing DATABASE_URL:', error.message);
   }
   
   return null;
 };
 
+// Try to get config from DATABASE_URL first (Railway style)
+const urlConfig = parseDatabaseUrl(process.env.DATABASE_URL);
+
+// Create configuration for each environment
 const createConfig = (env) => {
-  const urlConfig = parseDatabaseUrl(process.env.DATABASE_URL);
-  
+  // Priority 1: Use DATABASE_URL if available
   if (urlConfig) {
-    console.log(`Using DATABASE_URL for ${env}`);
+    console.log(`✅ Using DATABASE_URL for ${env} environment`);
     
     return {
       username: urlConfig.username,
@@ -56,7 +58,7 @@ const createConfig = (env) => {
       port: urlConfig.port,
       dialect: urlConfig.dialect,
       timezone: '+07:00',
-      logging: env === 'development',
+      logging: env === 'development' ? console.log : false,
       pool: {
         max: 5,
         min: 0,
@@ -64,9 +66,14 @@ const createConfig = (env) => {
         idle: 10000,
       },
       dialectOptions: urlConfig.dialect === 'postgres' ? {
-        ssl: { require: true, rejectUnauthorized: false }
+        ssl: {
+          require: true,
+          rejectUnauthorized: false
+        }
       } : urlConfig.dialect === 'mysql' ? {
-        ssl: { rejectUnauthorized: false }
+        ssl: process.env.MYSQL_SSL !== 'false' ? {
+          rejectUnauthorized: false
+        } : undefined
       } : {},
       define: {
         timestamps: true,
@@ -76,15 +83,18 @@ const createConfig = (env) => {
     };
   }
   
-  const username = process.env.MYSQLUSER || process.env.DB_USER;
-  const password = process.env.MYSQLPASSWORD || process.env.DB_PASSWORD;
-  const database = process.env.MYSQLDATABASE || process.env.DB_NAME;
-  const host = process.env.MYSQLHOST || process.env.DB_HOST;
-  const port = parseInt(process.env.MYSQLPORT || process.env.DB_PORT || '3306', 10);
+  // Priority 2: Use individual environment variables
+  const username = process.env.DB_USER || process.env.MYSQLUSER;
+  const password = process.env.DB_PASSWORD || process.env.MYSQLPASSWORD;
+  const database = process.env.DB_NAME || process.env.MYSQLDATABASE;
+  const host = process.env.DB_HOST || process.env.MYSQLHOST;
+  const port = parseInt(process.env.DB_PORT || process.env.MYSQLPORT || '3306', 10);
   const dialect = process.env.DB_DIALECT || 'mysql';
   
+  // Check if we have minimal config
   if (username && database && host) {
-    console.log(`Using individual variables for ${env}`);
+    console.log(`✅ Using individual DB_* variables for ${env} environment`);
+    console.log(`   Host: ${host}, Database: ${database}`);
     
     return {
       username,
@@ -94,15 +104,17 @@ const createConfig = (env) => {
       port,
       dialect,
       timezone: '+07:00',
-      logging: env === 'development',
+      logging: env === 'development' ? console.log : false,
       pool: {
         max: 5,
         min: 0,
         acquire: 30000,
         idle: 10000,
       },
-      dialectOptions: dialect === 'mysql' ? {
-        ssl: env === 'production' ? { rejectUnauthorized: false } : undefined
+      dialectOptions: process.env.DB_SSL === 'true' || dialect === 'mysql' ? {
+        ssl: {
+          rejectUnauthorized: false
+        }
       } : {},
       define: {
         timestamps: true,
@@ -112,28 +124,28 @@ const createConfig = (env) => {
     };
   }
   
-  if (env === 'production') {
-    console.error('No database configuration found in production!');
-    console.error('MYSQLHOST:', process.env.MYSQLHOST ? 'SET' : 'NOT SET');
-    console.error('MYSQLDATABASE:', process.env.MYSQLDATABASE ? 'SET' : 'NOT SET');
-    console.error('MYSQLUSER:', process.env.MYSQLUSER ? 'SET' : 'NOT SET');
-    
-    throw new Error('Database configuration required in production');
-  }
-  
-  console.warn('No database config found, using SQLite fallback');
+  // Priority 3: Fallback to safe defaults (SQLite in-memory)
+  console.warn('⚠️  WARNING: No database configuration found!');
+  console.warn('⚠️  Falling back to SQLite in-memory (data will NOT persist)');
+  console.warn('⚠️  Please set DATABASE_URL or DB_* environment variables in Railway');
   
   return {
+    username: 'user',
+    password: 'password',
+    database: 'database',
+    host: 'localhost',
+    port: 3306,
     dialect: 'sqlite',
-    storage: env === 'test' ? ':memory:' : './dev.sqlite',
+    storage: ':memory:', // SQLite in-memory
     timezone: '+07:00',
-    logging: env === 'development',
+    logging: false,
     pool: {
       max: 5,
       min: 0,
       acquire: 30000,
       idle: 10000,
     },
+    dialectOptions: {},
     define: {
       timestamps: true,
       underscored: true,
@@ -142,19 +154,22 @@ const createConfig = (env) => {
   };
 };
 
+// Export configurations for all environments
 const config = {
   development: createConfig('development'),
   test: createConfig('test'),
   production: createConfig('production'),
 };
 
+// Log final config (without sensitive data)
 const env = process.env.NODE_ENV || 'development';
-console.log(`Config for ${env}:`, {
-  host: config[env].host || 'N/A',
-  port: config[env].port || 'N/A',
-  database: config[env].database || 'N/A',
+console.log(`Final config for ${env}:`, {
+  host: config[env].host,
+  port: config[env].port,
+  database: config[env].database,
   dialect: config[env].dialect,
-  username: config[env].username ? '***' : 'NOT SET'
+  username: config[env].username ? '***' : 'NOT SET',
 });
 
 module.exports = config;
+
