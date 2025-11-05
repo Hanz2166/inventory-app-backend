@@ -7,12 +7,19 @@ const parseDatabaseUrl = (url) => {
   if (!url) return null;
   
   try {
-    const match = url.match(/^(\w+):\/\/([^:]+):([^@]+)@([^:/]+):?(\d+)?\/(.+?)(\?.*)?$/);
+    // Regex pattern untuk parse URL database
+    const pattern = /^(\w+):\/\/([^:]+):([^@]+)@([^:/]+):?(\d+)?\/(.+?)(\?.*)?$/;
+    const match = url.match(pattern);
     
     if (match) {
-      const [, protocol, username, password, host, port, database] = match;
-      let dialect = protocol;
+      const protocol = match[1];
+      const username = match[2];
+      const password = match[3];
+      const host = match[4];
+      const port = match[5];
+      const database = match[6];
       
+      let dialect = protocol;
       if (protocol === 'postgresql' || protocol === 'postgres') {
         dialect = 'postgres';
       } else if (protocol === 'mysql') {
@@ -40,7 +47,7 @@ const parseDatabaseUrl = (url) => {
 
 // Create configuration for each environment
 const createConfig = (env) => {
-  // Try DATABASE_URL first (Railway/Heroku format)
+  // Try DATABASE_URL first
   const urlConfig = parseDatabaseUrl(process.env.DATABASE_URL);
   
   if (urlConfig) {
@@ -79,7 +86,7 @@ const createConfig = (env) => {
     };
   }
   
-  // Try individual environment variables (Railway MySQL format)
+  // Try individual environment variables
   const username = process.env.MYSQLUSER || process.env.DB_USER;
   const password = process.env.MYSQLPASSWORD || process.env.DB_PASSWORD;
   const database = process.env.MYSQLDATABASE || process.env.DB_NAME;
@@ -120,7 +127,7 @@ const createConfig = (env) => {
     };
   }
   
-  // NO FALLBACK in production - throw error instead
+  // NO FALLBACK in production
   if (env === 'production') {
     console.error('❌ CRITICAL: No database configuration found in production!');
     console.error('Available environment variables:');
@@ -130,10 +137,10 @@ const createConfig = (env) => {
     console.error('  MYSQLPASSWORD:', process.env.MYSQLPASSWORD ? 'SET' : 'NOT SET');
     console.error('  DATABASE_URL:', process.env.DATABASE_URL ? 'SET' : 'NOT SET');
     
-    throw new Error('Database configuration is required in production. Please set MYSQL* or DATABASE_URL environment variables in Railway.');
+    throw new Error('Database configuration is required in production. Please set environment variables in Railway.');
   }
   
-  // Fallback to SQLite ONLY for development/test
+  // Fallback to SQLite for development only
   console.warn(`⚠️  WARNING: No database configuration found for ${env}!`);
   console.warn('⚠️  Falling back to SQLite (development/test only)');
   
@@ -156,16 +163,16 @@ const createConfig = (env) => {
   };
 };
 
-// Export configurations for all environments
+// Export configurations
 const config = {
   development: createConfig('development'),
   test: createConfig('test'),
   production: createConfig('production'),
 };
 
-// Log final config (without sensitive data)
+// Log final config
 const env = process.env.NODE_ENV || 'development';
-console.log(`\nFinal config for ${env}:`, {
+console.log(`Final config for ${env}:`, {
   host: config[env].host || 'N/A',
   port: config[env].port || 'N/A',
   database: config[env].database || 'N/A',
@@ -177,26 +184,20 @@ console.log(`\nFinal config for ${env}:`, {
 module.exports = config;
 ```
 
-## Langkah Deployment ke Railway:
+## Perhatikan juga:
 
-### 1. **Pastikan MySQL Database sudah dibuat di Railway**
-   - Buka Railway Dashboard
-   - Klik project Anda
-   - Klik "New" → "Database" → "Add MySQL"
+Log menunjukkan `MYSQLDATABASE: 'NOT SET'` - ini berarti **environment variable MySQL belum ter-set dengan benar di Railway!**
 
-### 2. **Set Environment Variables di Backend Service**
-   Di Railway Dashboard → Backend Service → Variables, tambahkan:
-```
-   NODE_ENV=production
-   PORT=8080
-   API_PREFIX=/api
-   CORS_ORIGIN=https://inventory-apl-frontend.vercel.app
-```
+### Cek Railway Variables:
 
-   Dan **reference variables dari MySQL** (auto-generated):
+1. Buka Railway Dashboard
+2. Pilih Backend Service
+3. Tab "Variables"
+4. **Pastikan ada MySQL service di project yang sama**
+5. Tambahkan reference variables:
 ```
-   MYSQLHOST=${{MySQL.MYSQLHOST}}
-   MYSQLDATABASE=${{MySQL.MYSQLDATABASE}}
-   MYSQLUSER=${{MySQL.MYSQLUSER}}
-   MYSQLPASSWORD=${{MySQL.MYSQLPASSWORD}}
-   MYSQLPORT=${{MySQL.MYSQLPORT}}
+MYSQLHOST=${{MySQL.MYSQLHOST}}
+MYSQLDATABASE=${{MySQL.MYSQLDATABASE}}
+MYSQLUSER=${{MySQL.MYSQLUSER}}
+MYSQLPASSWORD=${{MySQL.MYSQLPASSWORD}}
+MYSQLPORT=${{MySQL.MYSQLPORT}}
