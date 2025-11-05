@@ -115,7 +115,167 @@ app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
 // ============================================================================
-// RATE LIMITING
+// BODY PARSING & COMPRESSION (MOVED BEFORE EMERGENCY ROUTES!)
+// ============================================================================
+
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(compression()); // Compress responses
+
+// ============================================================================
+// EMERGENCY ROUTES - FIXED: MUST BE BEFORE RATE LIMITER!
+// ============================================================================
+
+// 🔥 FIX: Kondisi diperbaiki - emergency routes SELALU aktif di production!
+// Setelah selesai setup, set ALLOW_EMERGENCY=false atau hapus section ini
+if (process.env.ALLOW_EMERGENCY !== 'false') {
+  console.log('⚠️  EMERGENCY ROUTES ENABLED ⚠️');
+  console.log('🔧 To disable: Set ALLOW_EMERGENCY=false in environment variables');
+  
+  // Create admin user
+  app.post('/api/emergency-create-admin', async (req, res) => {
+    try {
+      console.log('🚨 Emergency create admin triggered');
+      const { User } = require('./models');
+      
+      // Check if admin exists
+      const existingAdmin = await User.findOne({ where: { username: 'admin' } });
+      
+      if (existingAdmin) {
+        console.log('⚠️  Admin already exists, updating password...');
+        
+        // Update password instead
+        const hashedPassword = await bcrypt.hash('admin123', 10);
+        await User.update(
+          { password: hashedPassword },
+          { where: { username: 'admin' } }
+        );
+        
+        console.log('✅ Admin password updated');
+        
+        return res.json({
+          success: true,
+          message: 'Admin user already exists - password updated',
+          data: {
+            username: 'admin',
+            password: 'admin123',
+            note: 'Password has been reset to admin123'
+          }
+        });
+      }
+
+      // Create admin user
+      console.log('📝 Creating new admin user...');
+      const hashedPassword = await bcrypt.hash('admin123', 10);
+      
+      await User.create({
+        username: 'admin',
+        password: hashedPassword,
+        full_name: 'System Administrator',
+        role: 'admin',
+        email: 'admin@example.com',
+        is_active: true
+      });
+
+      console.log('✅ Admin user created successfully');
+
+      res.json({
+        success: true,
+        message: 'Admin user created successfully',
+        data: {
+          username: 'admin',
+          password: 'admin123',
+          role: 'admin',
+          email: 'admin@example.com'
+        }
+      });
+    } catch (error) {
+      console.error('❌ Create admin error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to create admin user',
+        error: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      });
+    }
+  });
+
+  // Setup database schema
+  app.get('/api/emergency-setup', async (req, res) => {
+    try {
+      console.log('🚨 Emergency setup triggered');
+      const { sequelize } = require('./utils/database');
+      
+      // Force sync all tables
+      await sequelize.sync({ alter: true });
+      
+      console.log('✅ Database schema setup completed');
+      
+      res.json({
+        success: true,
+        message: 'Database schema setup completed'
+      });
+    } catch (error) {
+      console.error('❌ Setup error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Setup failed',
+        error: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      });
+    }
+  });
+
+  // Insert sample data
+  app.post('/api/emergency-insert-data', async (req, res) => {
+    try {
+      console.log('🚨 Emergency insert data triggered');
+      const { User } = require('./models');
+      
+      // Create admin first if not exists
+      const adminExists = await User.findOne({ where: { username: 'admin' } });
+      if (!adminExists) {
+        const hashedPassword = await bcrypt.hash('admin123', 10);
+        await User.create({
+          username: 'admin',
+          password: hashedPassword,
+          full_name: 'System Administrator',
+          role: 'admin',
+          email: 'admin@example.com',
+          is_active: true
+        });
+      }
+
+      console.log('✅ Sample data inserted successfully');
+
+      res.json({
+        success: true,
+        message: 'Sample data inserted successfully',
+        data: {
+          users: 1
+        }
+      });
+    } catch (error) {
+      console.error('❌ Insert data error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to insert sample data',
+        error: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      });
+    }
+  });
+
+  console.log('✓ Emergency routes registered at /api/emergency-*');
+  console.log('  POST /api/emergency-create-admin');
+  console.log('  GET  /api/emergency-setup');
+  console.log('  POST /api/emergency-insert-data');
+} else {
+  console.log('✅ Emergency routes DISABLED (ALLOW_EMERGENCY=false)');
+}
+
+// ============================================================================
+// RATE LIMITING (AFTER EMERGENCY ROUTES!)
 // ============================================================================
 
 // General rate limiter
@@ -154,140 +314,6 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
-
-// ============================================================================
-// BODY PARSING & COMPRESSION
-// ============================================================================
-
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-app.use(compression()); // Compress responses
-
-// ============================================================================
-// EMERGENCY ROUTES (MUST BE BEFORE RATE LIMITER!)
-// ============================================================================
-
-// Only enable emergency routes if explicitly allowed
-if (process.env.ALLOW_EMERGENCY === 'true' || process.env.NODE_ENV !== 'production') {
-  console.log('⚠️  EMERGENCY ROUTES ENABLED ⚠️');
-  
-  // Create admin user
-  app.post('/api/emergency-create-admin', async (req, res) => {
-    try {
-      const { User } = require('./models');
-      
-      // Check if admin exists
-      const existingAdmin = await User.findOne({ where: { username: 'admin' } });
-      
-      if (existingAdmin) {
-        return res.json({
-          success: true,
-          message: 'Admin user already exists',
-          data: {
-            username: 'admin',
-            note: 'Use existing password'
-          }
-        });
-      }
-
-      // Create admin user
-      const hashedPassword = await bcrypt.hash('admin123', 10);
-      
-      await User.create({
-        username: 'admin',
-        password: hashedPassword,
-        full_name: 'System Administrator',
-        role: 'admin',
-        email: 'admin@example.com',
-        is_active: true
-      });
-
-      console.log('✅ Admin user created successfully');
-
-      res.json({
-        success: true,
-        message: 'Admin user created successfully',
-        data: {
-          username: 'admin',
-          password: 'admin123',
-          role: 'admin',
-          email: 'admin@example.com'
-        }
-      });
-    } catch (error) {
-      console.error('❌ Create admin error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to create admin user',
-        error: error.message
-      });
-    }
-  });
-
-  // Setup database schema
-  app.get('/api/emergency-setup', async (req, res) => {
-    try {
-      const { sequelize } = require('./utils/database');
-      
-      // Force sync all tables
-      await sequelize.sync({ alter: true });
-      
-      console.log('✅ Database schema setup completed');
-      
-      res.json({
-        success: true,
-        message: 'Database schema setup completed'
-      });
-    } catch (error) {
-      console.error('❌ Setup error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Setup failed',
-        error: error.message
-      });
-    }
-  });
-
-  // Insert sample data
-  app.post('/api/emergency-insert-data', async (req, res) => {
-    try {
-      const { User } = require('./models');
-      
-      // Create admin first if not exists
-      const adminExists = await User.findOne({ where: { username: 'admin' } });
-      if (!adminExists) {
-        const hashedPassword = await bcrypt.hash('admin123', 10);
-        await User.create({
-          username: 'admin',
-          password: hashedPassword,
-          full_name: 'System Administrator',
-          role: 'admin',
-          email: 'admin@example.com',
-          is_active: true
-        });
-      }
-
-      console.log('✅ Sample data inserted successfully');
-
-      res.json({
-        success: true,
-        message: 'Sample data inserted successfully',
-        data: {
-          users: 1
-        }
-      });
-    } catch (error) {
-      console.error('❌ Insert data error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to insert sample data',
-        error: error.message
-      });
-    }
-  });
-
-  console.log('✓ Emergency routes registered at /api/emergency-*');
-}
 
 // ============================================================================
 // LOGGING
@@ -393,6 +419,11 @@ app.get('/', (req, res) => {
       salesOrders: '/api/sales-orders',
       stock: '/api/stock',
     },
+    emergency: process.env.ALLOW_EMERGENCY !== 'false' ? {
+      createAdmin: 'POST /api/emergency-create-admin',
+      setup: 'GET /api/emergency-setup',
+      insertData: 'POST /api/emergency-insert-data'
+    } : null,
     documentation: process.env.ENABLE_SWAGGER === 'true' ? '/api-docs' : null,
   });
 });
