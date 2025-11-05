@@ -2,20 +2,17 @@ require('dotenv').config();
 
 console.log('=== LOADING DATABASE CONFIG ===');
 
-// Helper function to parse DATABASE_URL (Railway/Heroku format)
+// Helper function to parse DATABASE_URL
 const parseDatabaseUrl = (url) => {
   if (!url) return null;
   
   try {
-    // Format: postgresql://username:password@host:port/database
-    // Also supports mysql://username:password@host:port/database
     const match = url.match(/^(\w+):\/\/([^:]+):([^@]+)@([^:/]+):?(\d+)?\/(.+?)(\?.*)?$/);
     
     if (match) {
       const [, protocol, username, password, host, port, database] = match;
-      
-      // Determine dialect from protocol
       let dialect = protocol;
+      
       if (protocol === 'postgresql' || protocol === 'postgres') {
         dialect = 'postgres';
       } else if (protocol === 'mysql') {
@@ -41,12 +38,11 @@ const parseDatabaseUrl = (url) => {
   return null;
 };
 
-// Try to get config from DATABASE_URL first (Railway style)
-const urlConfig = parseDatabaseUrl(process.env.DATABASE_URL);
-
 // Create configuration for each environment
 const createConfig = (env) => {
-  // Priority 1: Use DATABASE_URL if available
+  // Try DATABASE_URL first (Railway/Heroku format)
+  const urlConfig = parseDatabaseUrl(process.env.DATABASE_URL);
+  
   if (urlConfig) {
     console.log(`✅ Using DATABASE_URL for ${env} environment`);
     
@@ -71,9 +67,9 @@ const createConfig = (env) => {
           rejectUnauthorized: false
         }
       } : urlConfig.dialect === 'mysql' ? {
-        ssl: process.env.MYSQL_SSL !== 'false' ? {
+        ssl: {
           rejectUnauthorized: false
-        } : undefined
+        }
       } : {},
       define: {
         timestamps: true,
@@ -83,18 +79,18 @@ const createConfig = (env) => {
     };
   }
   
-  // Priority 2: Use individual environment variables
-  const username = process.env.DB_USER || process.env.MYSQLUSER;
-  const password = process.env.DB_PASSWORD || process.env.MYSQLPASSWORD;
-  const database = process.env.DB_NAME || process.env.MYSQLDATABASE;
-  const host = process.env.DB_HOST || process.env.MYSQLHOST;
-  const port = parseInt(process.env.DB_PORT || process.env.MYSQLPORT || '3306', 10);
+  // Try individual environment variables (Railway MySQL format)
+  const username = process.env.MYSQLUSER || process.env.DB_USER;
+  const password = process.env.MYSQLPASSWORD || process.env.DB_PASSWORD;
+  const database = process.env.MYSQLDATABASE || process.env.DB_NAME;
+  const host = process.env.MYSQLHOST || process.env.DB_HOST;
+  const port = parseInt(process.env.MYSQLPORT || process.env.DB_PORT || '3306', 10);
   const dialect = process.env.DB_DIALECT || 'mysql';
   
   // Check if we have minimal config
   if (username && database && host) {
     console.log(`✅ Using individual DB_* variables for ${env} environment`);
-    console.log(`   Host: ${host}, Database: ${database}`);
+    console.log(`   Host: ${host}, Database: ${database}, User: ${username}`);
     
     return {
       username,
@@ -111,10 +107,10 @@ const createConfig = (env) => {
         acquire: 30000,
         idle: 10000,
       },
-      dialectOptions: process.env.DB_SSL === 'true' || dialect === 'mysql' ? {
-        ssl: {
+      dialectOptions: dialect === 'mysql' ? {
+        ssl: env === 'production' ? {
           rejectUnauthorized: false
-        }
+        } : undefined
       } : {},
       define: {
         timestamps: true,
@@ -124,28 +120,34 @@ const createConfig = (env) => {
     };
   }
   
-  // Priority 3: Fallback to safe defaults (SQLite in-memory)
-  console.warn('⚠️  WARNING: No database configuration found!');
-  console.warn('⚠️  Falling back to SQLite in-memory (data will NOT persist)');
-  console.warn('⚠️  Please set DATABASE_URL or DB_* environment variables in Railway');
+  // NO FALLBACK in production - throw error instead
+  if (env === 'production') {
+    console.error('❌ CRITICAL: No database configuration found in production!');
+    console.error('Available environment variables:');
+    console.error('  MYSQLHOST:', process.env.MYSQLHOST ? 'SET' : 'NOT SET');
+    console.error('  MYSQLDATABASE:', process.env.MYSQLDATABASE ? 'SET' : 'NOT SET');
+    console.error('  MYSQLUSER:', process.env.MYSQLUSER ? 'SET' : 'NOT SET');
+    console.error('  MYSQLPASSWORD:', process.env.MYSQLPASSWORD ? 'SET' : 'NOT SET');
+    console.error('  DATABASE_URL:', process.env.DATABASE_URL ? 'SET' : 'NOT SET');
+    
+    throw new Error('Database configuration is required in production. Please set MYSQL* or DATABASE_URL environment variables in Railway.');
+  }
+  
+  // Fallback to SQLite ONLY for development/test
+  console.warn(`⚠️  WARNING: No database configuration found for ${env}!`);
+  console.warn('⚠️  Falling back to SQLite (development/test only)');
   
   return {
-    username: 'user',
-    password: 'password',
-    database: 'database',
-    host: 'localhost',
-    port: 3306,
     dialect: 'sqlite',
-    storage: ':memory:', // SQLite in-memory
+    storage: env === 'test' ? ':memory:' : './dev.sqlite',
     timezone: '+07:00',
-    logging: false,
+    logging: env === 'development' ? console.log : false,
     pool: {
       max: 5,
       min: 0,
       acquire: 30000,
       idle: 10000,
     },
-    dialectOptions: {},
     define: {
       timestamps: true,
       underscored: true,
@@ -163,12 +165,38 @@ const config = {
 
 // Log final config (without sensitive data)
 const env = process.env.NODE_ENV || 'development';
-console.log(`Final config for ${env}:`, {
-  host: config[env].host,
-  port: config[env].port,
-  database: config[env].database,
+console.log(`\nFinal config for ${env}:`, {
+  host: config[env].host || 'N/A',
+  port: config[env].port || 'N/A',
+  database: config[env].database || 'N/A',
   dialect: config[env].dialect,
   username: config[env].username ? '***' : 'NOT SET',
+  storage: config[env].storage || 'N/A'
 });
 
 module.exports = config;
+```
+
+## Langkah Deployment ke Railway:
+
+### 1. **Pastikan MySQL Database sudah dibuat di Railway**
+   - Buka Railway Dashboard
+   - Klik project Anda
+   - Klik "New" → "Database" → "Add MySQL"
+
+### 2. **Set Environment Variables di Backend Service**
+   Di Railway Dashboard → Backend Service → Variables, tambahkan:
+```
+   NODE_ENV=production
+   PORT=8080
+   API_PREFIX=/api
+   CORS_ORIGIN=https://inventory-apl-frontend.vercel.app
+```
+
+   Dan **reference variables dari MySQL** (auto-generated):
+```
+   MYSQLHOST=${{MySQL.MYSQLHOST}}
+   MYSQLDATABASE=${{MySQL.MYSQLDATABASE}}
+   MYSQLUSER=${{MySQL.MYSQLUSER}}
+   MYSQLPASSWORD=${{MySQL.MYSQLPASSWORD}}
+   MYSQLPORT=${{MySQL.MYSQLPORT}}
