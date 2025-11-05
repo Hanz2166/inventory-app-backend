@@ -2,85 +2,174 @@ require('dotenv').config();
 
 console.log('=== LOADING DATABASE CONFIG ===');
 
-// Railway provides these variables automatically
-const host = process.env.MYSQLHOST || process.env.DB_HOST || 'localhost';
-const port = parseInt(process.env.MYSQLPORT || process.env.DB_PORT || '3306');
-const database = process.env.MYSQLDATABASE || process.env.DB_NAME || 'database';
-const username = process.env.MYSQLUSER || process.env.DB_USER || 'root';
-const password = process.env.MYSQLPASSWORD || process.env.DB_PASSWORD || '';
-const dialect = process.env.DB_DIALECT || 'mysql';
+// Helper function to parse DATABASE_URL (Railway/Heroku format)
+const parseDatabaseUrl = (url) => {
+  if (!url) return null;
+  
+  try {
+    // Format: postgresql://username:password@host:port/database
+    // Also supports mysql://username:password@host:port/database
+    const match = url.match(/^(\w+):\/\/([^:]+):([^@]+)@([^:/]+):?(\d+)?\/(.+?)(\?.*)?$/);
+    
+    if (match) {
+      const [, protocol, username, password, host, port, database] = match;
+      
+      // Determine dialect from protocol
+      let dialect = protocol;
+      if (protocol === 'postgresql' || protocol === 'postgres') {
+        dialect = 'postgres';
+      } else if (protocol === 'mysql') {
+        dialect = 'mysql';
+      }
+      
+      console.log('✅ DATABASE_URL parsed successfully');
+      console.log(`   Dialect: ${dialect}, Host: ${host}, Database: ${database}`);
+      
+      return {
+        dialect,
+        username,
+        password,
+        database,
+        host,
+        port: parseInt(port || (dialect === 'mysql' ? '3306' : '5432'), 10)
+      };
+    }
+  } catch (error) {
+    console.error('❌ Error parsing DATABASE_URL:', error.message);
+  }
+  
+  return null;
+};
 
-console.log('Database credentials check:', {
-  host: host ? 'SET' : 'NOT SET',
-  port: port,
-  database: database ? 'SET' : 'NOT SET',
-  username: username ? 'SET' : 'NOT SET',
-  password: password ? 'SET' : 'NOT SET',
-  dialect: dialect
-});
+// Try to get config from DATABASE_URL first (Railway style)
+const urlConfig = parseDatabaseUrl(process.env.DATABASE_URL);
 
-// Jika tidak ada konfigurasi database, gunakan SQLite fallback
-if (!host || !database || !username) {
+// Create configuration for each environment
+const createConfig = (env) => {
+  // Priority 1: Use DATABASE_URL if available
+  if (urlConfig) {
+    console.log(`✅ Using DATABASE_URL for ${env} environment`);
+    
+    return {
+      username: urlConfig.username,
+      password: urlConfig.password,
+      database: urlConfig.database,
+      host: urlConfig.host,
+      port: urlConfig.port,
+      dialect: urlConfig.dialect,
+      timezone: '+07:00',
+      logging: env === 'development' ? console.log : false,
+      pool: {
+        max: 5,
+        min: 0,
+        acquire: 30000,
+        idle: 10000,
+      },
+      dialectOptions: urlConfig.dialect === 'postgres' ? {
+        ssl: {
+          require: true,
+          rejectUnauthorized: false
+        }
+      } : urlConfig.dialect === 'mysql' ? {
+        ssl: process.env.MYSQL_SSL !== 'false' ? {
+          rejectUnauthorized: false
+        } : undefined
+      } : {},
+      define: {
+        timestamps: true,
+        underscored: true,
+        freezeTableName: false,
+      }
+    };
+  }
+  
+  // Priority 2: Use individual environment variables
+  const username = process.env.DB_USER || process.env.MYSQLUSER;
+  const password = process.env.DB_PASSWORD || process.env.MYSQLPASSWORD;
+  const database = process.env.DB_NAME || process.env.MYSQLDATABASE;
+  const host = process.env.DB_HOST || process.env.MYSQLHOST;
+  const port = parseInt(process.env.DB_PORT || process.env.MYSQLPORT || '3306', 10);
+  const dialect = process.env.DB_DIALECT || 'mysql';
+  
+  // Check if we have minimal config
+  if (username && database && host) {
+    console.log(`✅ Using individual DB_* variables for ${env} environment`);
+    console.log(`   Host: ${host}, Database: ${database}`);
+    
+    return {
+      username,
+      password,
+      database,
+      host,
+      port,
+      dialect,
+      timezone: '+07:00',
+      logging: env === 'development' ? console.log : false,
+      pool: {
+        max: 5,
+        min: 0,
+        acquire: 30000,
+        idle: 10000,
+      },
+      dialectOptions: process.env.DB_SSL === 'true' || dialect === 'mysql' ? {
+        ssl: {
+          rejectUnauthorized: false
+        }
+      } : {},
+      define: {
+        timestamps: true,
+        underscored: true,
+        freezeTableName: false,
+      }
+    };
+  }
+  
+  // Priority 3: Fallback to safe defaults (SQLite in-memory)
   console.warn('⚠️  WARNING: No database configuration found!');
   console.warn('⚠️  Falling back to SQLite in-memory (data will NOT persist)');
   console.warn('⚠️  Please set DATABASE_URL or DB_* environment variables in Railway');
-}
-
-// Common configuration for all environments
-const commonConfig = {
-  dialect: (!host || !database || !username) ? 'sqlite' : dialect,
-  timezone: process.env.DB_TIMEZONE || '+07:00',
-  logging: process.env.ENABLE_SQL_LOGGING === 'true' ? console.log : false,
-  define: {
-    timestamps: true,
-    underscored: true,
-    freezeTableName: true,
-  },
-  pool: {
-    max: parseInt(process.env.DB_POOL_MAX || '5'),
-    min: parseInt(process.env.DB_POOL_MIN || '0'),
-    acquire: parseInt(process.env.DB_POOL_ACQUIRE || '30000'),
-    idle: parseInt(process.env.DB_POOL_IDLE || '10000'),
-  },
+  
+  return {
+    username: 'user',
+    password: 'password',
+    database: 'database',
+    host: 'localhost',
+    port: 3306,
+    dialect: 'sqlite',
+    storage: ':memory:', // SQLite in-memory
+    timezone: '+07:00',
+    logging: false,
+    pool: {
+      max: 5,
+      min: 0,
+      acquire: 30000,
+      idle: 10000,
+    },
+    dialectOptions: {},
+    define: {
+      timestamps: true,
+      underscored: true,
+      freezeTableName: false,
+    }
+  };
 };
 
-// Production configuration
-const productionConfig = {
-  ...commonConfig,
-  host,
-  port,
-  database,
-  username,
-  password,
-  dialectOptions: {
-    connectTimeout: 60000,
-  },
+// Export configurations for all environments
+const config = {
+  development: createConfig('development'),
+  test: createConfig('test'),
+  production: createConfig('production'),
 };
 
-// Development configuration (sama dengan production untuk konsistensi)
-const developmentConfig = {
-  ...productionConfig,
-  logging: process.env.ENABLE_SQL_LOGGING === 'true' ? console.log : false,
-};
-
-// Test configuration (gunakan SQLite)
-const testConfig = {
-  ...commonConfig,
-  dialect: 'sqlite',
-  storage: ':memory:',
-  logging: false,
-};
-
-console.log('Final config for', process.env.NODE_ENV || 'development', ':', {
-  host: productionConfig.host,
-  port: productionConfig.port,
-  database: productionConfig.database,
-  dialect: productionConfig.dialect,
-  username: productionConfig.username ? '***' : 'NOT SET'
+// Log final config (without sensitive data)
+const env = process.env.NODE_ENV || 'development';
+console.log(`Final config for ${env}:`, {
+  host: config[env].host,
+  port: config[env].port,
+  database: config[env].database,
+  dialect: config[env].dialect,
+  username: config[env].username ? '***' : 'NOT SET',
 });
 
-module.exports = {
-  development: developmentConfig,
-  production: productionConfig,
-  test: testConfig,
-};
+module.exports = config;
+
